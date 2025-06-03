@@ -62,9 +62,27 @@ function trigger(target, key, type, newValue) {
         })
     }
     // 如果是新增属性或者是删除属性 执行与 ITERATE_KEY 相关联的副作用函数
-    if (type === TriggerType.ADD || type === TriggerType.DELETE) {
+    if (type === TriggerType.ADD ||
+        type === TriggerType.DELETE || 
+        // 如果操作类型是 SET，并且目标对象是 Map 类型的数据，
+        // 也应该触发那些与 ITERATE_KEY 相关联的副作用函数重新执行
+        (type === TriggerType.SET && Object.prototype.toString.call(target) === '[object Map]')) {
         // 拿到与 ITERATE_KEY 关联的副作用函数
         const iterateEffects = depsMap.get(ITERATE_KEY)
+        iterateEffects && iterateEffects.forEach(effectFn => {
+            // 如果 trigger 触发执行的副作用函数与当前正在执行的副作用函数相同，则不触发执行
+            if (effectFn !== activeEffect) {
+                effectFnToRun.add(effectFn)
+            }
+        })
+    }
+    // 如果是新增属性或者是删除属性 执行与 MAP_KEY_ITERATE_KEY 相关联的副作用函数
+    if ((type === TriggerType.ADD ||
+        type === TriggerType.DELETE) && 
+        // 目标对象是 Map 类型的数据，应该触发那些与 MAP_KEY_ITERATE_KEY 相关联的副作用函数重新执行
+        Object.prototype.toString.call(target) === '[object Map]') {
+        // 拿到与 MAP_KEY_ITERATE_KEY 关联的副作用函数
+        const iterateEffects = depsMap.get(MAP_KEY_ITERATE_KEY)
         iterateEffects && iterateEffects.forEach(effectFn => {
             // 如果 trigger 触发执行的副作用函数与当前正在执行的副作用函数相同，则不触发执行
             if (effectFn !== activeEffect) {
@@ -224,6 +242,7 @@ const watch = (source, cb, options = {}) => {
 }
 
 let ITERATE_KEY = Symbol()
+let MAP_KEY_ITERATE_KEY = Symbol()
 
 // 重写数组的原型方法
 const arrayInstrumentations = {};
@@ -320,13 +339,63 @@ const mutableInstrumentations = {
             trigger(target, key, TriggerType.SET)
         }
     },
-    forEach(callback) {
+    forEach(callback, thisArg) {
+        // wrap 函数用来把可代理的值转换为响应式数据
+        const wrap = (val) => typeof val === 'object' ? reactive(val) : val
         // 拿到原始数据
         const target = this.raw
         // 与 ITERATE_KEY 建立响应联系
         track(target, ITERATE_KEY)
         // 通过原始数据对象调用 forEach 方法，并把 callback 传递过去
-        target.forEach(callback)
+        // 手动调用 callback，用 wrap 函数包裹 value 和 key 后再传给 callback，这样就实现了深响应
+        target.forEach((v, k) => {
+            callback.call(thisArg, wrap(v), wrap(k), this)
+        })
+    },
+    [Symbol.iterator]: iterationMethod(),
+    entires: iterationMethod(),
+    values: iterationMethod('values'),
+    keys: iterationMethod('keys'),
+}
+
+function iterationMethod(key) {
+    return function() {
+        // wrap 函数用来把可代理的值转换为响应式数据
+        const wrap = (val) => typeof val === 'object' ? reactive(val) : val
+        // 获取原始数据对象 target
+        const target = this.raw
+        // 获取原始迭代器方法
+        let itr
+        if (key === 'values' || key === 'keys') {
+            itr = key === 'values' ? target.values() : target.keys()
+        } else {
+            itr = target[Symbol.iterator]()
+        }
+        // 调用 track 函数建立响应联系
+        if (key === 'keys') {
+            track(target, MAP_KEY_ITERATE_KEY)
+        } else {
+            track(target, ITERATE_KEY)
+        }
+        // 返回自定义的迭代器
+        return {
+            next() {
+                const { value, done } = itr.next()
+                let newValue
+                if (key) {
+                    newValue = wrap(value)
+                } else {
+                    newValue = value ? [wrap(value[0]), wrap(value[1])] : value
+                }
+                return {
+                    value: newValue,
+                    done
+                }
+            },
+            [Symbol.iterator]() {
+                return this
+            }
+        }
     }
 }
 
@@ -375,17 +444,21 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
 }
 
 const po = reactive(new Map([
-    [{ key: 1 }, { value: 1 }]
+    ['key1', 'value1'],
+    ['key2', 'value2']
 ]))
 
 effect(() => {
-    po.forEach((value, key) => {
-        console.log(value)
+    for (const key of po.keys()) {
         console.log(key)
-    })
+    }
 })
 
-po.set({ key: 2 }, { value: 2 })
+po.set('key2', 'value3')
+po.set('key3', 'value3')
+
+
+
 
 
 

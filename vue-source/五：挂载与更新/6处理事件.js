@@ -1,0 +1,266 @@
+function createRenderer(options) {
+    const { 
+        createElement,
+        setElementText,
+        insert,
+        patchProps
+     } = options
+
+    function render(vnode, container) {
+        // 如果有新的 vnode
+        if (vnode) {
+            // 新 vnode 存在，将其与旧 vnode 一起传递给 patch 函数，进行打补丁
+            patch(container._vnode, vnode, container)
+        } else {
+             // 旧 vnode 存在，且新 vnode 不存在，说明是卸载（unmount）操作
+            // 只需要将 container 内的 DOM 清空即可
+            if (container._vnode) {
+                // 调用 unmount 函数卸载 vnode
+                unmount(container._vnode)
+            }
+        }
+        // 把 vnode 存储到 container._vnode 下，即后续渲染中的旧 vnode
+        container._vnode = vnode
+    }
+    
+    /**
+     * 
+     * @param {*} n1 旧 vnode
+     * @param {*} n2 新vnode
+     * @param {*} container 容器
+     */
+    function patch(n1, n2, container) {
+        // 如果 n1 存在，则对比 n1 和 n2 的类型
+        if (n1 && n1.type !== n2.type) {
+            // 如果新旧 vnode 的类型不同，则直接将旧 vnode 卸载
+            unmount(n1)
+            n1 = null
+        }
+        const { type } = n2
+        if (typeof type === 'string') {
+            if (!n1) {
+                mountElement(n2, container)
+            } else {
+                patchElement(n1, n2)
+            }
+        } else if (typeof type === 'object') {
+            // 如果 n2.type 的值的类型是对象，则它描述的是组件
+        } else if (type === 'xxx') {
+            // 处理其他类型的 vnode
+        }
+    }
+
+    /**
+     * 
+     * @param {*} n1 旧 vnode
+     * @param {*} n2 新 vnode
+     */
+    function patchElement(n1, n2) {
+
+    }
+
+     /**
+     * 
+     * @param {*} vnode 
+     */
+     function unmount(vnode) {
+        // 根据 vnode 获取要卸载的真实 DOM 元素
+        const el = vnode.el
+        // 获取 el 的父元素
+        const parent = el.parentNode
+        // 调用 removeChild 移除元素
+        if (parent) parent.removeChild(el)
+   }
+
+    /**
+     * 
+     * @param {*} vnode 新的 vnode
+     * @param {*} container 容器
+     */
+    function mountElement(vnode, container) {
+        // 创建 DOM 元素
+        const el = vnode.el = createElement(vnode.type)
+        // 处理子节点，如果子节点是字符串，代表元素具有文本节点
+        if (typeof vnode.children === 'string') {
+            // 调用 setElementText 设置元素的文本节点
+            setElementText(el, vnode.children)
+        } else if (Array.isArray(vnode.children)) {
+            // 如果 children 是数组，则遍历每一个子节点，并调用 patch 函数挂载它们
+            vnode.children.forEach(child => {
+                patch(null, child, el)
+            })
+        }
+
+        if (vnode.props) {
+            for (const key in vnode.props) {
+                // 调用 patchProps 函数即可
+                patchProps(el, key, null, vnode.props[key])
+            }
+        }
+        // 调用 insert 函数将元素插入到容器内
+        insert(el, container)
+    }
+
+    return {
+        render
+    }
+}
+
+/**
+ * 
+ * @param {*} el 
+ * @param {*} key 
+ * @param {*} value 
+ * @returns 
+ */
+function shouldSetAsProps(el, key, value) {
+    if (key === 'form' && el.tagName === 'INPUT') return false
+    return key in el
+}
+
+// 在创建 renderer 时传入配置项
+const renderer = createRenderer({
+    // 用于创建元素
+    createElement(tag) {
+        return document.createElement(tag)
+    },
+    // 用于设置元素的文本节点
+    setElementText(el, content) {
+        el.textContent = content
+    },
+    // 用于在给定的 parent 下添加指定元素
+    insert(el, parent) {
+        parent.appendChild(el)
+    },
+    // 将属性设置相关操作封装到 patchProps 函数中，并作为渲染器选项传递
+    patchProps(el, key, prevValue, nextValue) {
+        // 1. 先从 el._vei 中读取对应的 invoker，如果 invoker 不存在，则将伪造的 invoker 作为事件处理函数，并将它缓存到 el._vei 属性中。
+        // 2. 把真正的事件处理函数赋值给 invoker.value 属性，然后把伪造的 invoker 函数作为事件处理函数绑定到元素上。可以看到，当事件触发时，实际上执行的是伪造的事件处理函数，在其内部间接执行了真正的事件处理函数 invoker.value(e)
+        if (/^on/.test(key)) {
+            // 定义 el._vei 为一个对象，存在事件名称到事件处理函数的映射
+            const invokers = el._vei || (el._vei = {})
+            // 获取为该元素伪造的事件处理函数 invoker
+            let invoker = invokers[key]
+            // 获取事件名
+            const name = key.slice(2).toLowerCase()
+            if (nextValue) {
+                // 如果没有 invoker，则将一个伪造的 invoker 缓存到 el._vei 中
+                if (!invoker) {
+                    // 将事件处理函数缓存到 el._vei[key] 下，避免覆盖
+                    invoker = el._vei[key] = (e) => {
+                        // 如果 invoker.value 是数组，则遍历它并逐个调用事件处理函数
+                        if (Array.isArray(invoker.value)) {
+                            invoker.value.forEach(fn => fn(e))
+                        } else {
+                            // 否则直接作为函数调用
+                            invoker.value(e)
+                        }
+                    }
+                    // 将真正的事件处理函数赋值给 invoker.value
+                    invoker.value = nextValue
+                    // 绑定 invoker 作为事件处理函数
+                    el.addEventListener(name, invoker)
+                } else {
+                    // // 如果 invoker 存在，意味着更新，并且只需要更新 invoker.value的值即可
+                    invoker.value = nextValue
+                }
+            } else if (invoker) {
+                // 新的事件绑定函数不存在，且之前绑定的 invoker 存在，则移除绑定
+                el.removeEventListener(name, invoker)
+            }
+        } else if (key === 'class') {
+            el.className = nextValue
+        } else if (shouldSetAsProps(el, key, nextValue)) {
+            // 获取该 DOM Properties 的类型
+            const type = typeof el[key]
+            // 如果是布尔类型，并且 value 是空字符串，则将值矫正为 true
+            if (type === 'boolean' && nextValue === '') {
+                el[key] = true
+            } else {
+                el[key] = nextValue
+            }
+        } else {
+            // 如果要设置的属性没有对应的 DOM Properties，则使用 setAttribute 函数设置属性
+            el.setAttribute(key, nextValue)
+        }
+    }
+})
+
+const customRenderer = createRenderer({
+    // 用于创建元素
+    createElement(tag) {
+        console.log(`创建元素 ${tag}`)
+        return {
+            tag
+        }
+    },
+    // 用于设置元素的文本节点
+    setElementText(el, content) {
+        console.log(`设置 ${JSON.stringify(el)} 的文本内容：${content}`)
+        el.textContent = content
+    },
+    // 用于在给定的 parent 下添加指定元素
+    insert(el, parent, anchor = null) {
+        console.log(`将 ${JSON.stringify(el)} 添加到 ${JSON.stringify(parent)} 下`)
+        parent.children = el
+    }
+})
+
+function normalizeClassName(classes, key = '') {
+    function normalizeClass(classes, key = '') {
+        let resClassStr = ''
+        if (typeof classes === 'string') {
+            resClassStr += `${classes} `
+        } else if (typeof classes === 'boolean' && !!classes && !!key) {
+            resClassStr += `${key} `
+        } else if (Array.isArray(classes)) {
+            for (let i = 0; i < classes.length; i++) {
+                resClassStr += `${normalizeClass(classes[i])}`
+            }
+        } else if (typeof classes === 'object' && classes !== null) {
+            for (const k in classes) {
+                if (Object.hasOwnProperty.call(classes, k)) {
+                    resClassStr += `${normalizeClass(classes[k], k)}`
+                }
+            }
+        }
+    
+        return resClassStr
+    }
+    let normalizeClassStr = normalizeClass(classes, key = '')
+    return normalizeClassStr.trim()
+}
+
+const vnode = {
+    type: 'h1',
+    props: {
+        id: 'foo',
+        onClick: [
+            (e) =>{
+                console.log(e, 'e1 clicked')
+            },
+            (e) =>{
+                console.log(e, 'e2 clicked')
+            }
+        ],
+        onContextmenu: () => {
+            console.log('onContextmenu')
+        }
+    },
+    children: [
+        {
+            type: 'p',
+            children: 'hello'
+        },
+        {
+            type: 'button',
+            props: {
+                disabled: ''
+            },
+            children: '禁用的 button'
+        },
+    ]
+}
+// 使用一个对象模拟挂载点
+const container = document.getElementById('app')
+renderer.render(vnode, container)
